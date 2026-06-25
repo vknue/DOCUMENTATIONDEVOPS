@@ -267,4 +267,11 @@ spec:
 kubectl create deployment web --image=nginx:1.25 --replicas=3 --dry-run=client -o yaml > my-exam.yaml
 
 or to update:
-kubectl apply -f filename.yaml
+# 1. Export the LIVE running deployment to a file
+kubectl get deployment web -o yaml > live-update.yaml
+
+# 2. Open the file and make your changes (e.g., change replicas, add resources)
+vi live-update.yaml
+
+# 3. Push the patched file back into the cluster
+kubectl apply -f live-update.yaml
