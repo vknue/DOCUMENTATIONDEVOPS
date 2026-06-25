@@ -1,0 +1,190 @@
+### =========================================================================
+### THE GOD TEMPLATE: EXAM-FOCUSED KUBERNETES REFERENCE
+### Contains the maximum viable properties for Deployments, Pods, Services, and PVCs.
+### =========================================================================
+
+apiVersion: apps/v1                 # OPTIONS: v1 (Pods, ConfigMaps, Secrets, Services, PVCs), apps/v1 (Deployments, StatefulSets, DaemonSets), batch/v1 (Jobs, CronJobs)
+kind: Deployment                    # OPTIONS: Deployment, Pod, Service, ConfigMap, Secret, PersistentVolumeClaim, StatefulSet, DaemonSet, Job, CronJob
+metadata:
+  name: ultimate-reference-app      # TYPE: String. The unique identifier for this object.
+  namespace: exam-namespace         # TYPE: String. The virtual cluster boundary. Defaults to 'default'.
+  labels:                           # TYPE: Key-Value map. Arbitrary tags for querying and connecting objects.
+    environment: production
+  annotations:                      # TYPE: Key-Value map. Non-identifying metadata used by tools (e.g., rollout history).
+    kubernetes.io/change-cause: "Initial exhaustive deployment"
+
+spec:
+  # -------------------------------------------------------------------------
+  # DEPLOYMENT-LEVEL CONTROLS (Ignored if kind: Pod)
+  # -------------------------------------------------------------------------
+  replicas: 3                       # TYPE: Integer. Number of identical pod clones to maintain.
+  revisionHistoryLimit: 5           # TYPE: Integer. Number of dead ReplicaSets to keep in etcd for rollbacks.
+  
+  strategy:
+    type: RollingUpdate             # ENUM OPTIONS:
+                                    #   1. RollingUpdate: (Default) Swaps pods one by one. Zero downtime.
+                                    #   2. Recreate: Kills all old pods instantly, then boots new ones. Required for RWO storage or breaking DB schemas.
+    rollingUpdate:                  # Ignored if type is Recreate.
+      maxSurge: 25%                 # TYPE: Integer or Percentage. How many EXTRA pods can boot during an update.
+      maxUnavailable: 1             # TYPE: Integer or Percentage. How many pods are allowed to be offline during an update.
+
+  selector:                         # The "Targeting Laser". MUST exactly match template.metadata.labels.
+    matchLabels:
+      app: core-workload
+
+  # -------------------------------------------------------------------------
+  # THE POD TEMPLATE (The actual hardware/software blueprint)
+  # -------------------------------------------------------------------------
+  template:
+    metadata:
+      labels:
+        app: core-workload          # CRITICAL: This must match spec.selector.matchLabels exactly.
+    spec:
+      
+      # --- POD-LEVEL CONFIGURATION ---
+      nodeSelector:                 # TYPE: Key-Value map. Forces K8s to only schedule this pod on nodes with this exact label.
+        disktype: ssd
+      
+      restartPolicy: Always         # ENUM OPTIONS:
+                                    #   1. Always: (Default for Deployments). Reboot if it crashes or stops.
+                                    #   2. OnFailure: Only reboot if exit code is not 0 (Used for Jobs).
+                                    #   3. Never: Run once, if it dies, it stays dead.
+      
+      serviceAccountName: app-sa    # TYPE: String. Identity the pod uses to talk to the Kube API.
+      
+      securityContext:              # Applies to the whole pod infrastructure.
+        runAsUser: 1000             # TYPE: Integer. Forces all containers to run as this Linux UID.
+        fsGroup: 2000               # TYPE: Integer. Forces volume ownership to this Linux GID.
+
+      imagePullSecrets:             # Tells kubelet where to find the Docker login credentials.
+        - name: my-registry-key     # TYPE: String. Name of a Secret of type kubernetes.io/dockerconfigjson.
+
+      # --- INIT CONTAINERS (Run to completion BEFORE main containers boot) ---
+      initContainers:
+        - name: setup-script
+          image: busybox:1.36
+          command: ['sh', '-c', 'echo "Setup done"'] # TYPE: Array of strings. Overrides the Dockerfile ENTRYPOINT.
+
+      # --- MAIN CONTAINERS ---
+      containers:
+        - name: primary-app         # TYPE: String. Name of the internal container.
+          image: nginx:1.27         # TYPE: String. The exact OCI image URL/Tag.
+          
+          imagePullPolicy: IfNotPresent # ENUM OPTIONS:
+                                        #   1. Always: Forces network check to registry on every boot.
+                                        #   2. IfNotPresent: Uses local node cache first (saves bandwidth).
+                                        #   3. Never: Errors out if image isn't already physically on the node.
+
+          command: ["/bin/sh"]      # TYPE: Array of strings. Overrides Dockerfile ENTRYPOINT.
+          args: ["-c", "nginx -g 'daemon off;'"] # TYPE: Array of strings. Overrides Dockerfile CMD.
+          
+          workingDir: /usr/share/   # TYPE: String. Linux path where commands are executed.
+
+          ports:
+            - containerPort: 80     # TYPE: Integer. The software port the app listens on internally.
+              protocol: TCP         # ENUM OPTIONS: TCP, UDP, SCTP
+
+          # --- ENVIRONMENT VARIABLES ---
+          env:
+            - name: STATIC_VAR      # TYPE: String. Standard key-value pair.
+              value: "production"
+            - name: DB_PASSWORD     # Dynamically pulling a single value from a Secret.
+              valueFrom:
+                secretKeyRef:
+                  name: db-credentials  # Name of the Secret.
+                  key: password         # The specific key inside that Secret.
+          
+          envFrom:                  # Dumps an ENTIRE ConfigMap or Secret into the environment at once.
+            - configMapRef:
+                name: global-config
+
+          # --- HARDWARE BOUNDARIES ---
+          resources:
+            requests:               # The "Floor". Node must have this much free to accept the pod.
+              cpu: "200m"           # TYPE: String/Int. Millicores (1000m = 1 CPU).
+              memory: "256Mi"       # TYPE: String. Mebibytes.
+            limits:                 # The "Ceiling". Kernel triggers throttling or OOMKilled if breached.
+              cpu: "500m"
+              memory: "512Mi"
+
+          # --- THE PROBES (Health Checks) ---
+          # Applicable types: livenessProbe (reboots if fail), readinessProbe (yanks IP from Service if fail), startupProbe (warm-up grace period).
+          readinessProbe:
+            httpGet:                # ENUM OPTIONS for probe action:
+                                    #   1. httpGet: Pings a URL path (requires 200-399 status).
+                                    #   2. exec: Runs a shell command inside container (requires exit 0).
+                                    #   3. tcpSocket: Attempts a raw TCP port connection.
+              path: /health
+              port: 80
+            initialDelaySeconds: 5  # TYPE: Integer. Wait X seconds before first check.
+            periodSeconds: 10       # TYPE: Integer. Repeat check every X seconds.
+            failureThreshold: 3     # TYPE: Integer. How many consecutive failures before marking as "Failed".
+
+          # --- VOLUME MOUNTS (Inside the container) ---
+          volumeMounts:
+            - name: data-disk       # TYPE: String. Must exactly match a name in the 'volumes' list below.
+              mountPath: /var/data  # TYPE: String. Linux folder path inside the container.
+              readOnly: false       # TYPE: Boolean. If true, kernel blocks file writes.
+            - name: config-file
+              mountPath: /etc/config.json
+              subPath: config.json  # TYPE: String. Mounts exactly ONE file without overwriting the rest of the folder.
+
+      # --- VOLUMES (Attached to the Pod shell) ---
+      volumes:
+        - name: data-disk
+          persistentVolumeClaim:    # Links to external block storage.
+            claimName: my-pvc       # TYPE: String. Name of the PVC object.
+        
+        - name: temp-scratch
+          emptyDir:                 # Ephemeral folder that dies when the pod dies.
+            sizeLimit: 500Mi        # TYPE: String. Pod is evicted if it writes more than this.
+        
+        - name: config-file
+          configMap:                # Injects a ConfigMap as physical files.
+            name: app-config
+            defaultMode: 0644       # TYPE: Integer (Octal). Linux file permissions.
+
+---
+### =========================================================================
+### THE SERVICE (Networking Layer)
+### =========================================================================
+apiVersion: v1
+kind: Service
+metadata:
+  name: app-service
+spec:
+  type: ClusterIP                   # ENUM OPTIONS:
+                                    #   1. ClusterIP: (Default) Internal stable IP. Unreachable from outside.
+                                    #   2. NodePort: Opens a port (30000-32767) on the physical host machine firewall.
+                                    #   3. LoadBalancer: Triggers AWS/Azure to provision a real cloud load balancer.
+                                    #   4. ExternalName: Acts as a DNS CNAME redirect.
+  
+  clusterIP: None                   # TYPE: String. Putting 'None' here creates a "Headless Service" (No VIP, returns raw pod IPs).
+  
+  selector:                         # The "Targeting Laser". MUST match the Deployment's pod template labels.
+    app: core-workload
+  
+  ports:
+    - port: 80                      # TYPE: Integer. The port the Service itself listens on.
+      targetPort: 80                # TYPE: Integer. The port the target Container is listening on.
+      nodePort: 30080               # TYPE: Integer. (Only if type=NodePort). The physical firewall port.
+
+---
+### =========================================================================
+### THE PERSISTENT VOLUME CLAIM (Storage Ticket)
+### =========================================================================
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: my-pvc
+spec:
+  accessModes:                      # ENUM OPTIONS:
+    - ReadWriteOnce                 #   1. ReadWriteOnce (RWO): Can only be mounted to ONE physical node at a time.
+                                    #   2. ReadWriteMany (RWX): Can be mounted to many nodes simultaneously (requires NFS/EFS).
+                                    #   3. ReadOnlyMany (ROX): Mounted as read-only to many nodes.
+  
+  resources:
+    requests:
+      storage: 5Gi                  # TYPE: String. The exact amount of hard drive space requested.
+  
+  storageClassName: standard        # TYPE: String. The name of the automated provisioner to use (e.g., standard, gp2, fast-nvme).
