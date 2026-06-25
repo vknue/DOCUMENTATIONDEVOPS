@@ -265,3 +265,6 @@ spec:
 
 
 kubectl create deployment web --image=nginx:1.25 --replicas=3 --dry-run=client -o yaml > my-exam.yaml
+
+or to update:
+kubectl apply -f filename.yaml
